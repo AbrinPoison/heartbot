@@ -8,4 +8,9 @@ class InvalidUsername(Exception):
 class InvalidEmail(Exception):
 	def __init__(*args, **kwargs):
 		Exception.__init__(*args,"Invalid email.")
-		
+class InvalidUID(Exception):
+	def __init__(*args, **kwargs):
+		Exception.__init__(*args,"Invalid user id")
+class InvalidUpdate(Exception):
+	def __init__(*args, **kwargs):
+		Exception.__init__(*args,"Invalid user id")

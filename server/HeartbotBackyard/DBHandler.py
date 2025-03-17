@@ -17,7 +17,12 @@ class User(Base):
     password = Column(String)
     type = Column(String)
     
-    
+class Admin(Base):  
+    __tablename__ = "admins"  
+    id = Column(Integer, primary_key=True)
+    username = Column(String, unique=True)  
+    password = Column(String)
+    type = Column(String)
     
 
 
@@ -50,13 +55,13 @@ def register_user(email:str,username:str,password:str):
 	email=email,
 	username=username,
 	password=sha256(salt+password.encode()).hexdigest(),
-	type="free",
+	type="unverified",
 	)
 	
 	database.add(user)
 	try:
 		database.commit()
-		return True
+		return user
 	except exc.IntegrityError:
 		database.rollback()
 		raise Errors.UnavailableUsername()
@@ -80,3 +85,86 @@ def check_login_creds(username:str, password:str):
 	else:
 		return False
 
+def change_email(user_id,new_email):
+	
+	user = database.query(User).filter_by(id=user_id).first()
+	if user:
+		old_user_data=user
+		print(user.email)
+		if new_email!=user.email:
+			
+			user.email=new_email
+			database.commit()
+			return old_user_data
+		else:
+			raise Errors.InvalidUpdate()
+	else:
+		
+		raise Errors.InvalidUID()
+
+def suspend_user(user_id):
+	
+	user = database.query(User).filter_by(id=user_id).first()
+	if user:
+		if not str(user.type).endswith("suspended"):
+			user.type+=":suspended"
+			database.commit()
+		else:
+			raise Errors.InvalidUpdate()
+	else:
+		
+		raise Errors.InvalidUID()
+
+def suspend_user(user_id):
+	
+	user = database.query(User).filter_by(id=user_id).first()
+	if user:
+		if not str(user.type).endswith("suspended"):
+			user.type+=":suspended"
+			database.commit()
+		else:
+			raise Errors.InvalidUpdate()
+	else:
+		
+		raise Errors.InvalidUID()
+
+def unsuspend_user(user_id):
+	
+	user = database.query(User).filter_by(id=user_id).first()
+	if user:
+		if str(user.type).endswith(":suspended"):
+			user.type.replace(":suspended","")
+			database.commit()
+		else:
+			raise Errors.InvalidUpdate()
+	else:
+		
+		raise Errors.InvalidUID()
+def create_admin(username, password):
+	
+	user = database.query(Admin).filter_by(username=username).first()
+	if not user:
+		database.delete(user)
+		database.commit()
+	else:
+		
+		raise Errors.InvalidUpdate()
+def remove_admin(username):
+	
+	user = database.query(User).filter_by(username=username).first()
+	if user:
+		database.delete(user)
+		database.commit()
+	else:
+		raise Errors.InvalidUID()
+def verify_account(user_id):
+	user = database.query(User).filter_by(id=user_id).first()
+	if user:
+		if user.type=="unverified":
+			user.type="free"
+			database.commit()
+		else:
+			raise Errors.InvalidUpdate()
+	else:
+		
+		raise Errors.InvalidUID()
