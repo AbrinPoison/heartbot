@@ -7,8 +7,7 @@ from flask import current_app
 class EmailHandler:
     def __init__(self):
         self.client = None
-        self.sender_email = None
-        self.password = None
+        self.sender_email = None  # Initialize sender_email to None
 
     def init_app(self):
         # Initialize necessary configuration
@@ -17,17 +16,20 @@ class EmailHandler:
         self.sender_email = current_app.config.get('SENDER_EMAIL', 'support@heartbot.gg')
         self.password = current_app.config.get('EMAIL_PASSWORD', 'baldybaldy6$')
 
-    def _login(self):
-        # Create the SSL context and log in
+        # Create the SSL context
         context = ssl.create_default_context()
-        self.client = smtplib.SMTP_SSL(current_app.config.get('SMTP_SERVER', 'mail.privateemail.com'), 
-                                       current_app.config.get('SMTP_PORT', 465), context=context)
+
+        # Initialize and connect to the SMTP server using the connect() method
+        self.client = smtplib.SMTP_SSL(smtp_server, smtp_port, context=context)
+        self.client.connect(smtp_server, smtp_port)  # Explicitly call connect()
+
+        # Log in to the SMTP server
         self.client.login(self.sender_email, self.password)
 
     def verify_email(self, email_to, otp, username):
-        # Re-login each time
-        self._login()
-
+        if not self.sender_email:
+            raise ValueError("Email handler is not initialized. Please call init_app() first.")
+        
         confirm_html = """
         <html>
           <head>
@@ -69,12 +71,11 @@ class EmailHandler:
         
         # Send email
         self.client.sendmail(self.sender_email, email_to, message.as_string())
-        self.client.quit()  # Close the connection after sending
 
     def password_reset(self, email_to, otp, username):
-        # Re-login each time
-        self._login()
-
+        if not self.sender_email:
+            raise ValueError("Email handler is not initialized. Please call init_app() first.")
+        
         reset_otp_html = """
         <html>
           <head>
@@ -116,11 +117,10 @@ class EmailHandler:
         
         # Send email
         self.client.sendmail(self.sender_email, email_to, message.as_string())
-        self.client.quit()  # Close the connection after sending
 
     def email_changed(self, email_to, username, new_email):
-        # Re-login each time
-        self._login()
+        if not self.sender_email:
+            raise ValueError("Email handler is not initialized. Please call init_app() first.")
 
         email_change_html = """
         <html>
@@ -164,4 +164,3 @@ class EmailHandler:
         
         # Send email
         self.client.sendmail(self.sender_email, email_to, message.as_string())
-        self.client.quit()  # Close the connection after sending
