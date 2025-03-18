@@ -1,8 +1,8 @@
-from sqlalchemy import create_engine, Column, Integer, String, exc
+from sqlalchemy import create_engine, Column, Integer, String, exc, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker  
 from hashlib import sha256
 from . import Errors
-import re, uuid
+import re, uuid, redis
 email_regex = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
 username_regex = r'^[a-z][a-zA-Z0-9_]{2,19}$'
 
@@ -15,14 +15,17 @@ class User(Base):
     email = Column(String)
     username = Column(String, unique=True)  
     password = Column(String)
-    type = Column(String)
+    is_subscribed = Column(Boolean, default=False)
+    is_suspended = Column(Boolean,default=False)
+    is_verified = Column(Boolean,default=False)
+    
     
 class Admin(Base):  
     __tablename__ = "admins"  
     id = Column(Integer, primary_key=True)
     username = Column(String, unique=True)  
     password = Column(String)
-    type = Column(String)
+    
     
 
 
@@ -55,7 +58,6 @@ def register_user(email:str,username:str,password:str):
 	email=email,
 	username=username,
 	password=sha256(salt+password.encode()).hexdigest(),
-	type="unverified",
 	)
 	
 	database.add(user)
@@ -66,7 +68,8 @@ def register_user(email:str,username:str,password:str):
 		database.rollback()
 		raise Errors.UnavailableUsername()
 	
-	
+def fetch_user(user_id):
+	return database.query(User).filter_by(id=user_id).first()
 
 def check_login_creds(username:str, password:str):
 	if _is_email(username):
@@ -89,11 +92,12 @@ def change_email(user_id,new_email):
 	
 	user = database.query(User).filter_by(id=user_id).first()
 	if user:
-		old_user_data=user
+		old_user_data={"username":user.username,"email":user.email}
 		print(user.email)
 		if new_email!=user.email:
 			
 			user.email=new_email
+			user.is_verified=False
 			database.commit()
 			return old_user_data
 		else:
@@ -102,12 +106,13 @@ def change_email(user_id,new_email):
 		
 		raise Errors.InvalidUID()
 
+
 def suspend_user(user_id):
 	
 	user = database.query(User).filter_by(id=user_id).first()
 	if user:
-		if not str(user.type).endswith("suspended"):
-			user.type+=":suspended"
+		if not user.is_suspended:
+			user.is_suspended=True
 			database.commit()
 		else:
 			raise Errors.InvalidUpdate()
@@ -115,25 +120,13 @@ def suspend_user(user_id):
 		
 		raise Errors.InvalidUID()
 
-def suspend_user(user_id):
-	
-	user = database.query(User).filter_by(id=user_id).first()
-	if user:
-		if not str(user.type).endswith("suspended"):
-			user.type+=":suspended"
-			database.commit()
-		else:
-			raise Errors.InvalidUpdate()
-	else:
-		
-		raise Errors.InvalidUID()
 
 def unsuspend_user(user_id):
 	
 	user = database.query(User).filter_by(id=user_id).first()
 	if user:
-		if str(user.type).endswith(":suspended"):
-			user.type.replace(":suspended","")
+		if user.is_suspended:
+			user.is_suspended=False
 			database.commit()
 		else:
 			raise Errors.InvalidUpdate()
@@ -144,7 +137,10 @@ def create_admin(username, password):
 	
 	user = database.query(Admin).filter_by(username=username).first()
 	if not user:
-		database.delete(user)
+		database.add(Admin(
+		username=username,
+		password=sha256(salt+password.encode()).hexdigest()
+		))
 		database.commit()
 	else:
 		
@@ -157,11 +153,23 @@ def remove_admin(username):
 		database.commit()
 	else:
 		raise Errors.InvalidUID()
-def verify_account(user_id):
+def edit_verify(user_id,state:bool):
 	user = database.query(User).filter_by(id=user_id).first()
 	if user:
-		if user.type=="unverified":
-			user.type="free"
+		if user.is_verified!=state:
+			user.is_verified=state
+		else:
+			raise Errors.InvalidUpdate()
+	else:
+		
+		raise Errors.InvalidUID()
+def change_password(user_id,new_password):
+	
+	user = database.query(User).filter_by(id=user_id).first()
+	if user:
+		hashed_new_password=sha256(salt+new_password.encode()).hexdigest()
+		if hashed_new_password != user.password:
+			user.password=hashed_new_password
 			database.commit()
 		else:
 			raise Errors.InvalidUpdate()

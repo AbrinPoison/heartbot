@@ -1,26 +1,70 @@
 import HeartbotBackyard.DBHandler as DBHandler
 import HeartbotBackyard.Errors as Errors
 from HeartbotBackyard.Email import EmailHandler
-import pyotp, base64
-from flask import Blueprint, jsonify, request, session
-#import redis
+from flask import Blueprint, jsonify, request, session, make_response
+import redis,random,uuid
 
+
+r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 #rdis=redis.Redis(host="localhost",port=6379,db=0,decode_responses=True)
 api_bp = Blueprint('api', __name__, url_prefix='/api')
-secret=pyotp.random_base32()
+
 
 smtp=EmailHandler()
 
 
 def handle_otp(user_id, otp=None):
-	user_id_bytes = str(user_id).encode('utf-8')
-	encoded_combined = base64.b32encode(user_id_bytes + secret.encode('utf-8')).decode('utf-8')
-	
-	if not otp:
-		return pyotp.TOTP(encoded_combined,interval=600).now()
+	if otp:
+		if r.get(str(user_id)) == otp:
+			return True
+		else :
+			return False
 	else:
-		return pyotp.TOTP(encoded_combined,interval=600).verify(otp)
+		notp=str(random.randint(100000,999999))
+		r.setex(str(user_id),600,notp)
+		return notp
+
+def session_builder(user):
 	
+	session_id=f"{user.id}:{uuid.uuid4()}"
+	r.hset(session_id, mapping = {
+	'user_id': user.id,
+	'email': user.email,
+	'username': user.username,
+	'is_subscribed': int(user.is_subscribed),
+	'is_suspended': int(user.is_suspended),
+	'is_verified': int(user.is_verified)
+	})
+
+	return session_id
+
+def update_session(session_id):
+	
+	user=DBHandler.fetch_user(r.hget(session_id,"user_id"))
+	r.hset(session_id, mapping = {
+	'user_id': user.id,
+	'email': user.email,
+	'username': user.username,
+	'is_subscribed': int(user.is_subscribed),
+	'is_suspended': int(user.is_suspended),
+	'is_verified': int(user.is_verified)
+	})
+
+def invoke_sessions_except(session_id):
+	user_id=r.hget(session_id,"user_id")
+	sessions=r.scan_iter(f"{user_id}:*")
+	
+	for asession in sessions:
+		if asession==session_id : continue
+		else: r.delete(asession)
+
+def fetch_session(session_id):
+	return r.hgetall(session_id)
+
+def not_logged_in():
+	response=make_response(jsonify({"status":"error","code":"not_logged_in"}), 401)
+	response.set_cookie("session_id","",expires=0)
+	return response
 def bad_request(message):
 	return jsonify({"status":"bad_request","code":message}), 400
 def invalid_request(message, code=400):
@@ -41,10 +85,10 @@ def login():
 	 if username and password:
 	 	user_data=DBHandler.check_login_creds(username,password)
 	 	if user_data :
-	 		session["id"]=user_data.id
-	 		session["username"]=user_data.username
-	 		session["type"]=user_data.type
-	 		return jsonify({"status":"success"})
+	 		session_id=session_builder(user_data)
+	 		response=make_response(jsonify({"status":"success"}))
+	 		response.set_cookie("session_id",session_id,httponly=True,secure=True)
+	 		return response
 	 		
 	 	else:
 	 		return error("wrong_username_or_password")
@@ -61,13 +105,14 @@ def register():
 	if email and username and password:
 		try:
 			user_data=DBHandler.register_user(email,username,password)
+			#otp=handle_otp(user_data.id)
+			#smtp.verify_email(email,otp,username)
 			
-			session["id"]=user_data.id
-			session["username"]=user_data.username
-			session["type"]=user_data.type
-			otp=handle_otp(user_data.id)
-			smtp.verify_email(email,otp,username)
-			return {"status":"success","message":"confirm_email"}
+			session_id=session_builder(user_data)
+			response=make_response(jsonify({"status":"success"}))
+			response.set_cookie("session_id",session_id,httponly=True,secure=True)
+			return response
+			
 		except Errors.InvalidEmail:
 			return error("invalid_email")
 		except Errors.InvalidUsername:
@@ -88,32 +133,32 @@ def check_username():
 
 @api_bp.route("/get_profile", methods=["GET"])
 def mytoken():
-	if session.get("id",False):
+	session_info=fetch_session(request.cookies.get("session_id","None"))
+	if session_info:
 		
 		return jsonify(
 		{"status":"success",
 		"data":
-			{
-			"user_id":session["id"],
-			"username":session["username"],
-			"type":session["type"]
-			}
+			session_info
 		})
 	else:
-		return error("not_logged_in",401)
+		return not_logged_in()
 
 @api_bp.route("/change_email",methods=["GET"])
 def change_email():
-	id=session.get("id",False)
-	if id:
+	session_info=fetch_session(request.cookies.get("session_id","None"))
+	if session_info:
+		uid=session_info["user_id"]
 		new_email = request.args.get("new_email")
 		if new_email:
 			try:
-				old=DBHandler.change_email(id,new_email)
-				smtp.email_changed(old.email,old.username,new_email)
-				otp=handle_otp(id)
-				smtp.verify_email(new_email, otp, old.username)
-				return {"status":"success","message":"confirm_email"}
+				old=DBHandler.change_email(uid,new_email)
+				smtp.email_changed(old["email"],old["username"],new_email)
+				otp=handle_otp(uid)
+				smtp.verify_email(new_email, otp, old["username"])
+				DBHandler.edit_verify(uid,False)
+				update_session(request.cookies.get("session_id","None"))
+				return {"status":"success","code":"confirm_email"}
 			except Errors.InvalidUID:
 				return error("invalid_uid")
 			except Errors.InvalidUpdate:
@@ -121,18 +166,18 @@ def change_email():
 		else:
 			return error("missing_parameter")
 	else:
-		return error("not_logged_in",401)
+		return not_logged_in()
 
 
 @api_bp.route("/verify", methods=["GET"])
 def verify():
-	id=session.get("id",False)
-	if id:
+	session_info=fetch_session(request.cookies.get("session_id","None"))
+	if session_info:
 		otp = request.args.get("otp")
 		if otp:
 			
-			if handle_otp(id,otp):
-				DBHandler.verify_account(id)
+			if handle_otp(session_info["user_id"],otp):
+				DBHandler.edit_verify(session_info["user_id"],True)
 				return jsonify({"status": "success"})
 			
 			else:
@@ -140,7 +185,26 @@ def verify():
 		else:
 			return error("missing_parameter")
 	else:
-		return error("not_logged_in",401)
+		return not_logged_in()
+		
+@api_bp.route("/change_password", methods=["GET"])
+def change_password():
+	session_info=fetch_session(request.cookies.get("session_id","None"))
+	if session_info:
+		new_password = request.args.get("password")
+		if new_password:
+			try:
+				DBHandler.change_password(session_info["user_id"],new_password)
+				invoke_sessions_except(request.cookies.get("session_id","None"))
+				return jsonify({"status": "success"})
+			except Errors.InvalidUpdate:
+				return error("password_didnt_change")
+			
+		else:
+			return error("missing_parameter")
+	else:
+		return not_logged_in()
+
 
 
 ##### Admin #####
